@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# secrets and per-deployment config
+.env
+
+# runtime artefacts
+msa/
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.pid
+
+.DS_Store
