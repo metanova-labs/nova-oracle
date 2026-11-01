@@ -13,7 +13,7 @@ scored against.
 ## Quickstart
 
 ```bash
-./deploy/provision.sh          # bare GPU box -> ready, ~4 min
+./deploy/provision.sh          # bare GPU box -> ready, 10-20 min
 cp .env.example .env           # then edit
 ./deploy/run.sh                # start (or restart)
 python3 tests/smoke.py         # verify every route
@@ -168,8 +168,10 @@ sqlite3 oracle.db 'SELECT miner, COUNT(*) FROM predictions GROUP BY miner'
 
 ## Requirements
 
-Python ≥3.10, plus `boltz` and a CUDA-matched torch build installed separately;
-`deploy/provision.sh` handles both. Alignment generation calls the ColabFold
+Python 3.12 and an NVIDIA driver ≥580. `deploy/provision.sh` installs the
+packages locked in `deploy/requirements-boltz2.txt`, including the patched boltz
+from [nova](https://github.com/metanova-labs/nova) at a pinned commit. Changing
+any version can change scores. Alignment generation calls the ColabFold
 MSA server, so the box needs outbound network on first use of a new sequence.
 
 ## License

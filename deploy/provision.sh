@@ -1,48 +1,39 @@
 #!/usr/bin/env bash
-# Provision a fresh GPU box into a running oracle.
+# Provision a GPU box: the locked environment and the Boltz-2 weights.
+# Idempotent.
 #
-# Everything the service needs: the boltz source (from the nova repo), a CUDA
-# torch environment, and the Boltz-2 weights. Alignments are not provisioned --
-# the oracle generates and caches its own. Idempotent -- safe to re-run; each
-# step skips if already done.
-#
-#   ./provision.sh 2>&1 | tee provision.log
+#   ./deploy/provision.sh 2>&1 | tee provision.log
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
-NOVA_DIR="${NOVA_DIR:-/root/nova}"
-CACHE="${BOLTZ_CACHE:-/root/.boltz}"
-VENV="$NOVA_DIR/.venv"
+VENV=.venv
+CACHE="$HOME/.boltz"
 step() { printf '\n=== %s (%s) ===\n' "$1" "$(date -u +%H:%M:%S)"; }
 
 step "system packages"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq git build-essential python3-venv python3-dev curl >/dev/null
-
-step "nova checkout (boltz source)"
-if [ ! -d "$NOVA_DIR/.git" ]; then
-  git clone --depth 1 -q https://github.com/metanova-labs/nova.git "$NOVA_DIR"
+need=()
+command -v git >/dev/null || need+=(git)
+command -v curl >/dev/null || need+=(curl)
+command -v gcc >/dev/null || need+=(build-essential)
+python3 -c "import ensurepip" 2>/dev/null || need+=(python3-venv)
+python3 -c "import sysconfig, os; assert os.path.exists(sysconfig.get_path('include') + '/Python.h')" 2>/dev/null || need+=(python3-dev)
+if [ ${#need[@]} -gt 0 ]; then
+  sudo=$([ "$(id -u)" -eq 0 ] || echo sudo)
+  $sudo apt-get update -qq
+  $sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${need[@]}" >/dev/null
 fi
-test -d "$NOVA_DIR/external_tools/boltz" || { echo "boltz source missing"; exit 1; }
 
 step "python environment"
+# Host pip config can pin other versions.
+export PIP_CONFIG_FILE=/dev/null
 if [ ! -x "$VENV/bin/python" ]; then
   python3 -m venv "$VENV"
 fi
 "$VENV/bin/pip" install -q --upgrade pip wheel
 
-step "torch + boltz dependencies"
-# requirements.txt resolves a CUDA-capable torch; we match cuequivariance to
-# whatever CUDA that torch was built against rather than pinning a second stack.
-"$VENV/bin/pip" install -q -r "$NOVA_DIR/requirements/requirements.txt"
-"$VENV/bin/pip" install -q -e "$NOVA_DIR/external_tools/boltz"
-TORCH_CUDA="$("$VENV/bin/python" -c 'import torch; print(torch.version.cuda)')"
-case "$TORCH_CUDA" in 13*) SUF=cu13 ;; *) SUF=cu12 ;; esac
-echo "  torch cuda=$TORCH_CUDA -> cuequivariance $SUF"
-"$VENV/bin/pip" install -q "cuequivariance-ops-${SUF}" "cuequivariance-ops-torch-${SUF}" cuequivariance-torch
-
-step "oracle service dependencies"
-"$VENV/bin/pip" install -q fastapi uvicorn pydantic anyio
+step "locked packages"
+"$VENV/bin/pip" install -q --no-deps -r deploy/requirements-boltz2.txt
+"$VENV/bin/pip" check
 
 step "Boltz-2 weights"
 mkdir -p "$CACHE"
@@ -72,4 +63,4 @@ except Exception as exc:
 PY
 du -sh "$CACHE" | sed 's/^/  weights: /'
 echo
-echo "provisioned. start with: ORACLE_GPUS=0,... ./deploy/run.sh"
+echo "provisioned. start with: ./deploy/run.sh"

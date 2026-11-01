@@ -3,7 +3,7 @@ name = "nova-oracle"
 version = "0.1.0"
 description = "Boltz-2 protein-ligand affinity scoring as a service, for NOVA (Bittensor subnet 68)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { file = "LICENSE" }
 dependencies = [
     "fastapi>=0.110",
@@ -16,8 +16,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/metanova-labs/nova-oracle"
 
-# boltz and a CUDA-matched torch are installed separately against the host CUDA
-# version; see README and deploy/provision.sh.
+# Runtime dependencies are locked in deploy/requirements-boltz2.txt.
 
 [build-system]
 requires = ["setuptools>=61"]
