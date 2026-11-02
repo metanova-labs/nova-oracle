@@ -12,6 +12,7 @@ msa/
 *.db-shm
 *.db-wal
 *.log
+*.log.*
 *.pid
 
 .DS_Store

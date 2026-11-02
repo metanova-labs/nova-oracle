@@ -108,6 +108,18 @@ Tuning settings default to the model's measured values, listed in its README:
 | `ORACLE_RECYCLE_RSS_GB` | retire a shard above this RSS |
 | `ORACLE_MAX_BATCH` | predictions per request |
 
+## Running
+
+`deploy/run.sh` (re)starts the oracle in the background and restarts it if it
+crashes, unless it exits during startup (a missing setting, say). Output goes to
+`oracle.log`, rotated at 50 MB with five old files kept. Stop it with
+`kill -- -$(cat oracle.pid)`.
+
+To start it at boot, run `deploy/autostart.sh`. Where systemd runs, it installs
+and enables `nova-oracle.service`, which logs to `journalctl -u nova-oracle`. In
+a container, pass it the script the container runs at start, e.g.
+`deploy/autostart.sh /root/onstart.sh` on Vast.
+
 ## Tests
 
 ```bash
