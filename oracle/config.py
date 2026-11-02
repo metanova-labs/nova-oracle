@@ -1,48 +1,73 @@
-"""Runtime configuration, entirely from the environment."""
+"""Runtime configuration, entirely from the environment.
+
+Machine settings have no default. Tuning settings default to the model's
+measured values and can be overridden.
+"""
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+TUNING = {
+    "shards_per_gpu": int,
+    "stagger_s": float,
+    "request_timeout_s": float,
+    "recycle_rss_gb": float,
+    "max_batch": int,
+}
 
-def _ints(name: str, default: str) -> tuple[int, ...]:
-    return tuple(int(x) for x in os.environ.get(name, default).split(",") if x != "")
+
+def required(name: str) -> str:
+    value = os.environ.get(name, "")
+    if not value:
+        raise SystemExit(f"{name} is not set; copy the model's env.example to .env")
+    return value
 
 
 @dataclass(frozen=True)
 class Config:
     model: str
     gpus: tuple[int, ...]
-    shards_per_gpu: int
-    stagger_s: float
     host: str
     port: int
     token: str
     db_path: Path
+    shards_per_gpu: int
+    stagger_s: float
     request_timeout_s: float
     recycle_rss_gb: float
     max_batch: int
+    overridden: tuple[str, ...] = field(default=())
 
     @classmethod
-    def from_env(cls) -> "Config":
+    def from_env(cls, tuning: dict) -> "Config":
+        """tuning: the model's default for every TUNING setting."""
+        values, overridden = {}, []
+        for name, kind in TUNING.items():
+            raw = os.environ.get(f"ORACLE_{name.upper()}", "")
+            values[name] = kind(raw or tuning[name])
+            if raw:
+                overridden.append(name)
         return cls(
-            model=os.environ.get("ORACLE_MODEL", "boltz2"),
-            gpus=_ints("ORACLE_GPUS", "0"),
-            # Bounded by host RAM (~14 GB/shard) or VRAM (~5.7 GB/shard).
-            shards_per_gpu=int(os.environ.get("ORACLE_SHARDS_PER_GPU", "3")),
-            stagger_s=float(os.environ.get("ORACLE_STAGGER_S", "2")),
-            host=os.environ.get("ORACLE_HOST", "127.0.0.1"),
-            port=int(os.environ.get("ORACLE_PORT", "8000")),
-            token=os.environ.get("ORACLE_TOKEN", ""),
-            db_path=Path(os.environ.get("ORACLE_DB", "oracle.db")),
-            request_timeout_s=float(os.environ.get("ORACLE_REQUEST_TIMEOUT_S", "900")),
-            # Must exceed the ~14 GB plateau shard RSS settles at, or shards
-            # are rebuilt forever; and stay under hostRAM/shards.
-            recycle_rss_gb=float(os.environ.get("ORACLE_RECYCLE_RSS_GB", "17")),
-            max_batch=int(os.environ.get("ORACLE_MAX_BATCH", "256")),
+            model=required("ORACLE_MODEL"),
+            gpus=tuple(int(x) for x in required("ORACLE_GPUS").split(",")),
+            host=required("ORACLE_HOST"),
+            port=int(required("ORACLE_PORT")),
+            token=required("ORACLE_TOKEN"),
+            db_path=Path(required("ORACLE_DB")),
+            overridden=tuple(overridden),
+            **values,
         )
 
     @property
     def shards(self) -> int:
         return len(self.gpus) * self.shards_per_gpu
+
+    def describe(self) -> str:
+        machine = (f"model={self.model} gpus={','.join(map(str, self.gpus))} "
+                   f"host={self.host} port={self.port} db={self.db_path}")
+        tuning = " ".join(
+            f"{name}={getattr(self, name)}{'' if name in self.overridden else ' (default)'}"
+            for name in TUNING)
+        return f"{machine} {tuning}"

@@ -9,7 +9,8 @@ sequence digest.
 ## Setup
 
 ```bash
-./deploy/provision.sh boltz2   # bare GPU box -> ready, 10-20 min
+./deploy/provision.sh boltz2               # bare GPU box -> ready, 10-20 min
+cp oracle/models/boltz2/env.example .env   # then edit
 ```
 
 Needs Python 3.12 and an NVIDIA driver ≥580. `provision.sh` installs the
@@ -18,9 +19,19 @@ packages locked in `requirements.txt`, including the patched boltz from
 version can change scores. The box needs outbound network the first time it
 sees a sequence.
 
-| variable | default | notes |
-|---|---|---|
-| `ORACLE_MSA_DIR` | `msa` | alignment cache, one `.a3m` per sequence digest |
+| variable | notes |
+|---|---|
+| `BOLTZ2_MSA_DIR` | alignment cache, one `.a3m` per sequence digest; required |
+
+Tuning defaults, measured on 8× RTX 4090:
+
+| variable | default |
+|---|---|
+| `ORACLE_SHARDS_PER_GPU` | 3 |
+| `ORACLE_STAGGER_S` | 2 |
+| `ORACLE_REQUEST_TIMEOUT_S` | 900 |
+| `ORACLE_RECYCLE_RSS_GB` | 17 |
+| `ORACLE_MAX_BATCH` | 256 |
 
 ## Scores
 

@@ -1,9 +1,9 @@
 """Boltz-2: shards hold both checkpoints; each target needs an alignment."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
+from ...config import required
 from . import msa
 
 # Every scalar Boltz reports, plus the three the worker flattens out of its
@@ -24,9 +24,17 @@ class Model:
     # Ubiquitin, single-sequence mode: a cold start needs no network.
     probe = ("MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQ"
              "KESTLHLVLRLRGG", "empty")
+    # Measured on 8x RTX 4090; sizing is in the README.
+    tuning = {
+        "shards_per_gpu": 3,
+        "stagger_s": 2,
+        "request_timeout_s": 900,
+        "recycle_rss_gb": 17,
+        "max_batch": 256,
+    }
 
     def __init__(self):
-        self.msa_dir = Path(os.environ.get("ORACLE_MSA_DIR", "msa"))
+        self.msa_dir = Path(required("BOLTZ2_MSA_DIR"))
 
     def known_proteins(self) -> list[dict]:
         """Targets prepared by an earlier run."""

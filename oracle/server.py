@@ -8,6 +8,7 @@ POSTing its targets, which prepares them for the model and warms the shards.
 from __future__ import annotations
 
 import concurrent.futures as futures
+import hmac
 import logging
 import time
 import uuid
@@ -20,7 +21,7 @@ from fastapi.responses import JSONResponse
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
 from . import __version__, models, sequence
-from .config import Config
+from .config import Config, required
 from .pool import Pool
 from .store import Store
 
@@ -28,8 +29,8 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("oracle")
 
-CFG = Config.from_env()
-MODEL = models.load(CFG.model)
+MODEL = models.load(required("ORACLE_MODEL"))
+CFG = Config.from_env(MODEL.tuning)
 
 
 class State:
@@ -42,6 +43,7 @@ S = State()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    log.info("settings %s", CFG.describe())
     log.info("starting %d shards on gpus %s", CFG.shards, list(CFG.gpus))
     started = time.time()
     S.pool = Pool(CFG, MODEL)
@@ -62,7 +64,8 @@ app = FastAPI(title="nova-oracle", version=__version__, lifespan=lifespan)
 async def authorize(request: Request, call_next):
     # Network policy belongs at the edge; this only checks the token.
     if request.url.path != "/health":
-        if CFG.token and request.headers.get("authorization") != f"Bearer {CFG.token}":
+        given = request.headers.get("authorization", "").encode()
+        if not hmac.compare_digest(given, f"Bearer {CFG.token}".encode()):
             return JSONResponse({"detail": "bad token"}, status_code=401)
     return await call_next(request)
 
@@ -83,7 +86,7 @@ Sequences = Annotated[list[str], AfterValidator(_residues)]
 class ProteinRequest(BaseModel):
     sequences: Sequences = Field(..., min_length=1, max_length=16)
     # Positional against `sequences`; the oracle only ever sees the sequence.
-    labels: list[str] | None = None
+    labels: list[Annotated[str, Field(max_length=128)]] | None = None
 
     @model_validator(mode="after")
     def _labels_align(self):
@@ -95,8 +98,8 @@ class ProteinRequest(BaseModel):
 class ScoreRequest(BaseModel):
     miner: str = Field(..., min_length=1, max_length=128)
     targets: Sequences = Field(..., min_length=1, max_length=8)
-    smiles: list[str] = Field(..., min_length=1)
-    epoch: str | None = None
+    smiles: list[Annotated[str, Field(max_length=2000)]] = Field(..., min_length=1, max_length=10000)
+    epoch: str | None = Field(None, max_length=128)
 
 
 @app.post("/v1/proteins")
