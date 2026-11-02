@@ -64,7 +64,8 @@ def _search(msa_dir: Path, sequences: list[str]) -> None:
         alignments = run_mmseqs2(
             sequences, Path(scratch) / "search", use_env=True, use_pairing=False)
         for sequence, a3m in zip(sequences, alignments):
-            staged = Path(scratch) / f"{digest(sequence)}.a3m"
+            target = path(msa_dir, sequence)
+            staged = target.with_suffix(".partial")
             staged.write_text(a3m)
-            staged.replace(path(msa_dir, sequence))
+            staged.replace(target)
 
