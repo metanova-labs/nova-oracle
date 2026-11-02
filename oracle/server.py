@@ -1,9 +1,9 @@
-"""Boltz-2 affinity scoring over a pool of resident shards.
+"""Affinity scoring over a pool of resident shards.
 
-One process per shard, each holding both checkpoints. Every request uses the
+One process per shard, each holding the model resident. Every request uses the
 whole pool and no per-caller state is kept, so throughput is set by how deeply
 callers batch. Proteins are addressed by sequence; a round is prepared by
-POSTing its targets, which caches their alignments and warms the shards.
+POSTing its targets, which prepares them for the model and warms the shards.
 """
 from __future__ import annotations
 
@@ -19,8 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
-from . import msa
-from . import __version__
+from . import __version__, models, sequence
 from .config import Config
 from .pool import Pool
 from .store import Store
@@ -30,6 +29,7 @@ logging.basicConfig(
 log = logging.getLogger("oracle")
 
 CFG = Config.from_env()
+MODEL = models.load(CFG.model)
 
 
 class State:
@@ -44,13 +44,13 @@ S = State()
 async def lifespan(app: FastAPI):
     log.info("starting %d shards on gpus %s", CFG.shards, list(CFG.gpus))
     started = time.time()
-    S.pool = Pool(CFG)
+    S.pool = Pool(CFG, MODEL)
     log.info("shards spawned in %.0fs; warming", time.time() - started)
     log.info("warmed in %.0fs", S.pool.warm())
-    S.store = Store(str(CFG.db_path))
+    S.store = Store(str(CFG.db_path), MODEL.metrics)
     S.store.record_proteins([
         (p["sequence_hash"], p["sequence"], p["residues"], p["depth"], None)
-        for p in msa.resident(CFG.msa_dir)])
+        for p in MODEL.known_proteins()])
     yield
     S.pool.shutdown()
 
@@ -68,8 +68,8 @@ async def authorize(request: Request, call_next):
 
 
 def _residues(sequences: list[str]) -> list[str]:
-    for sequence in sequences:
-        why = msa.invalid(sequence)
+    for target in sequences:
+        why = sequence.invalid(target)
         if why:
             raise ValueError(why)
     return sequences
@@ -101,24 +101,23 @@ class ScoreRequest(BaseModel):
 
 @app.post("/v1/proteins")
 async def register_proteins(req: ProteinRequest):
-    """Cache every target's alignment, then warm the shards on the first.
+    """Prepare every target, then warm the shards on the first.
 
-    Idempotent and cheap once cached, so callers run it at the top of every
-    round. An uncached sequence costs an MSA search of tens of seconds."""
+    Idempotent and cheap once prepared, so callers run it at the top of every
+    round."""
     started = time.time()
     try:
-        proteins = await anyio.to_thread.run_sync(
-            msa.ensure, CFG.msa_dir, req.sequences)
+        proteins = await anyio.to_thread.run_sync(MODEL.prepare, req.sequences)
     except Exception as exc:  # noqa: BLE001 - an upstream failure, not a bad request
-        log.warning("alignment search failed: %s", exc)
+        log.warning("target preparation failed: %s", exc)
         raise HTTPException(
-            502, f"alignment search failed: {type(exc).__name__}: {exc}") from exc
+            502, f"target preparation failed: {type(exc).__name__}: {exc}") from exc
     labels = req.labels or [None] * len(req.sequences)
     S.store.record_proteins([
         (p["sequence_hash"], sequence, p["residues"], p["depth"], label)
         for p, sequence, label in zip(proteins, req.sequences, labels)])
     warm_s = await anyio.to_thread.run_sync(
-        S.pool.warm, req.sequences[0], str(msa.path(CFG.msa_dir, req.sequences[0])))
+        S.pool.warm, req.sequences[0], MODEL.target_input(req.sequences[0]))
     log.info("proteins n=%d built=%d warm=%.0fs total=%.0fs", len(proteins),
              sum(1 for p in proteins if not p["cached"]), warm_s,
              time.time() - started)
@@ -128,18 +127,17 @@ async def register_proteins(req: ProteinRequest):
 
 @app.post("/v1/score")
 async def score(req: ScoreRequest):
-    alignments = [msa.path(CFG.msa_dir, target) for target in req.targets]
-    missing = [msa.digest(t) for t, a in zip(req.targets, alignments)
-               if not a.exists()]
+    inputs = [MODEL.target_input(target) for target in req.targets]
+    missing = [sequence.digest(t) for t, i in zip(req.targets, inputs) if i is None]
     if missing:
         raise HTTPException(
-            409, f"no alignment for {missing}; register with POST /v1/proteins")
+            409, f"{missing} not prepared; register with POST /v1/proteins")
 
     # One prediction is one (molecule, target) pair -- the unit of GPU work.
-    units = [{"id": f"q{i:05d}t{t}", "sequence": target, "msa": str(alignment),
+    units = [{"id": f"q{i:05d}t{t}", "sequence": target, "input": target_input,
               "smiles": smi}
              for i, smi in enumerate(req.smiles)
-             for t, (target, alignment) in enumerate(zip(req.targets, alignments))]
+             for t, (target, target_input) in enumerate(zip(req.targets, inputs))]
     if len(units) > CFG.max_batch:
         raise HTTPException(413, f"{len(units)} predictions exceeds {CFG.max_batch}")
 
@@ -154,7 +152,7 @@ async def score(req: ScoreRequest):
 
     # Positional: results[i].scores[t] is smiles[i] against targets[t], null
     # where that prediction failed. Sequences are long, so we return digests.
-    digests = [msa.digest(target) for target in req.targets]
+    digests = [sequence.digest(target) for target in req.targets]
     results, rows = [], []
     for i, smi in enumerate(req.smiles):
         scores = []

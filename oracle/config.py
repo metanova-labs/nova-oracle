@@ -12,6 +12,7 @@ def _ints(name: str, default: str) -> tuple[int, ...]:
 
 @dataclass(frozen=True)
 class Config:
+    model: str
     gpus: tuple[int, ...]
     shards_per_gpu: int
     stagger_s: float
@@ -19,7 +20,6 @@ class Config:
     port: int
     token: str
     db_path: Path
-    msa_dir: Path
     request_timeout_s: float
     recycle_rss_gb: float
     max_batch: int
@@ -27,6 +27,7 @@ class Config:
     @classmethod
     def from_env(cls) -> "Config":
         return cls(
+            model=os.environ.get("ORACLE_MODEL", "boltz2"),
             gpus=_ints("ORACLE_GPUS", "0"),
             # Bounded by host RAM (~14 GB/shard) or VRAM (~5.7 GB/shard).
             shards_per_gpu=int(os.environ.get("ORACLE_SHARDS_PER_GPU", "3")),
@@ -35,7 +36,6 @@ class Config:
             port=int(os.environ.get("ORACLE_PORT", "8000")),
             token=os.environ.get("ORACLE_TOKEN", ""),
             db_path=Path(os.environ.get("ORACLE_DB", "oracle.db")),
-            msa_dir=Path(os.environ.get("ORACLE_MSA_DIR", "msa")),
             request_timeout_s=float(os.environ.get("ORACLE_REQUEST_TIMEOUT_S", "900")),
             # Must exceed the ~14 GB plateau shard RSS settles at, or shards
             # are rebuilt forever; and stay under hostRAM/shards.

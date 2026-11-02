@@ -1,22 +1,11 @@
 """Audit trail: who asked, in which epoch, which molecule against which target,
-and every score Boltz returned. One writer, so SQLite; WAL so reads never
-block it."""
+and every score the model returned. One writer, so SQLite; WAL so reads never
+block it. A database holds one model's predictions."""
 from __future__ import annotations
 
 import sqlite3
 import threading
 import time
-
-# Every scalar Boltz reports, plus the three the worker flattens out of its
-# two per-chain maps. The rest of those maps duplicate columns already here.
-METRICS = (
-    "affinity_pred_value", "affinity_probability_binary",
-    "affinity_pred_value1", "affinity_probability_binary1",
-    "affinity_pred_value2", "affinity_probability_binary2",
-    "confidence_score", "ptm", "iptm", "ligand_iptm", "protein_iptm",
-    "complex_plddt", "complex_iplddt", "complex_pde", "complex_ipde",
-    "chains_ptm_protein", "chains_ptm_ligand", "pair_chains_iptm_protein_ligand",
-)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS proteins (
@@ -56,22 +45,25 @@ CREATE INDEX IF NOT EXISTS ix_pred_mol   ON predictions(target, smiles);
 CREATE INDEX IF NOT EXISTS ix_pred_miner ON predictions(miner, epoch);
 CREATE INDEX IF NOT EXISTS ix_pred_ts    ON predictions(ts);
 CREATE INDEX IF NOT EXISTS ix_req_miner  ON requests(miner, epoch);
-""" % ",\n  ".join(f"{m:<28} REAL" for m in METRICS)
-
-_INSERT = (
-    "INSERT INTO predictions (ts,request_id,miner,epoch,target,smiles,gpu,"
-    + ",".join(METRICS) + ") VALUES (" + ",".join("?" * (7 + len(METRICS))) + ")")
+"""
 
 
 class Store:
-    def __init__(self, path: str):
+    def __init__(self, path: str, metrics: tuple[str, ...]):
+        self.metrics = metrics
+        self.insert = (
+            "INSERT INTO predictions (ts,request_id,miner,epoch,target,smiles,gpu,"
+            + ",".join(metrics) + ") VALUES (" + ",".join("?" * (7 + len(metrics))) + ")")
         self.lock = threading.Lock()
         self.con = sqlite3.connect(path, check_same_thread=False)
         self.con.execute("PRAGMA journal_mode=WAL")
         self.con.execute("PRAGMA synchronous=NORMAL")
         self.con.execute("PRAGMA foreign_keys=ON")
-        self.con.executescript(_SCHEMA)
+        self.con.executescript(_SCHEMA % ",\n  ".join(f"{m:<28} REAL" for m in metrics))
         self.con.commit()
+        columns = {row[1] for row in self.con.execute("PRAGMA table_info(predictions)")}
+        if missing := [m for m in metrics if m not in columns]:
+            raise RuntimeError(f"{path} holds another model's predictions (no {missing[0]})")
 
     def record_proteins(self, rows: list[tuple]) -> None:
         """rows: (sequence_hash, sequence, residues, msa_depth, label).
@@ -92,7 +84,7 @@ class Store:
         now = time.time()
         values = [
             (now, request["request_id"], request["miner"], request["epoch"],
-             target, smiles, gpu, *((metrics or {}).get(m) for m in METRICS))
+             target, smiles, gpu, *((metrics or {}).get(m) for m in self.metrics))
             for target, smiles, gpu, metrics in rows]
         with self.lock:
             self.con.execute(
@@ -101,6 +93,6 @@ class Store:
                 (request["request_id"], now, request["miner"], request["epoch"],
                  request["molecules"], request["targets"], len(rows),
                  request["shards"], request["elapsed_s"]))
-            self.con.executemany(_INSERT, values)
+            self.con.executemany(self.insert, values)
             self.con.commit()
         return len(values)

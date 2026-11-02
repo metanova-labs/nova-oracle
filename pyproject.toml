@@ -1,7 +1,7 @@
 [project]
 name = "nova-oracle"
 version = "0.1.0"
-description = "Boltz-2 protein-ligand affinity scoring as a service, for NOVA (Bittensor subnet 68)"
+description = "Protein-ligand affinity scoring as a service, for NOVA (Bittensor subnet 68)"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
@@ -16,11 +16,11 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/metanova-labs/nova-oracle"
 
-# Runtime dependencies are locked in deploy/requirements-boltz2.txt.
+# Runtime dependencies are locked per model in oracle/models/*/requirements.txt.
 
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["oracle"]
+[tool.setuptools.packages.find]
+include = ["oracle*"]
