@@ -32,9 +32,31 @@ import json
 import os
 import urllib.error
 import urllib.request
+from pathlib import Path
 
-BASE = os.environ.get("ORACLE_URL", "http://127.0.0.1:8000").rstrip("/")
-TOKEN = os.environ.get("ORACLE_TOKEN", "")
+
+def _settings() -> dict:
+    """The repo's .env, overridden by the environment."""
+    env = {}
+    dotenv = Path(__file__).resolve().parent.parent / ".env"
+    if dotenv.exists():
+        for line in dotenv.read_text().splitlines():
+            key, sep, value = line.partition("=")
+            if sep and not key.lstrip().startswith("#"):
+                env[key.strip()] = value.strip().strip("'\"")
+    return env | dict(os.environ)
+
+
+def _setting(name):
+    if not SETTINGS.get(name):
+        raise SystemExit(f"{name} is not set in .env or the environment")
+    return SETTINGS[name]
+
+
+SETTINGS = _settings()
+BASE = (SETTINGS.get("ORACLE_URL")
+        or f"http://{_setting('ORACLE_HOST')}:{_setting('ORACLE_PORT')}").rstrip("/")
+TOKEN = _setting("ORACLE_TOKEN")
 
 
 def call(path, body=None, method=None, token=TOKEN, timeout=3600):

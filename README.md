@@ -108,6 +108,17 @@ Tuning settings default to the model's measured values, listed in its README:
 | `ORACLE_RECYCLE_RSS_GB` | retire a shard above this RSS |
 | `ORACLE_MAX_BATCH` | predictions per request |
 
+## Tests
+
+```bash
+python3 -m unittest discover tests   # offline: settings, store, pool, API on a fake shard
+python3 tests/smoke.py               # every route of a running oracle
+python3 tests/bench.py               # throughput against batch depth
+```
+
+The offline tests need no GPU, only the service packages `pip install .` brings.
+The live ones read the host, port and token from `.env`, or `ORACLE_URL`.
+
 ## The store
 
 Every prediction is recorded: which miner asked, in which epoch, which molecule

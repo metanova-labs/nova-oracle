@@ -31,11 +31,12 @@ code, body = call("/v1/proteins", {"sequences": [NNMT, PDL1],
                                    "labels": ["P40261", "Q9NZQ7"]})
 check("register 2 targets", code, 200)
 for protein in body.get("proteins", []):
-    print("    %s %4daa depth=%-6d cached=%s"
+    print("    %s %4daa depth=%-6s cached=%s"
           % (protein["sequence_hash"], protein["residues"],
              protein["depth"], protein["cached"]))
 print("    warm=%ss total=%.0fs" % (body.get("warm_s"), time.time() - started))
-check("all cached", all(p["cached"] for p in body.get("proteins", [])), True)
+code, body = call("/v1/proteins", {"sequences": [NNMT, PDL1]})
+check("registering again is cached", all(p["cached"] for p in body.get("proteins", [])), True)
 
 print("=== scoring ===")
 started = time.time()
