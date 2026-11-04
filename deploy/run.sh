@@ -26,9 +26,21 @@ case "${1:-}" in
   --supervise) supervise 2>&1 | python3 deploy/rotate_log.py oracle.log; exit ;;
 esac
 
+running() {
+  ps -eo pgid=,stat= | awk -v g="$1" '$1 == g && $2 !~ /^Z/ { live = 1 } END { exit !live }'
+}
+
 if [ -f oracle.pid ]; then
-  kill -TERM -"$(cat oracle.pid)" 2>/dev/null; sleep 4
-  kill -KILL -"$(cat oracle.pid)" 2>/dev/null; rm -f oracle.pid
+  group=$(cat oracle.pid)
+  kill -TERM -"$group" 2>/dev/null; sleep 4
+  kill -KILL -"$group" 2>/dev/null
+  # Killed shards take a while to release their memory.
+  for _ in $(seq 60); do running "$group" || break; sleep 1; done
+  if running "$group"; then
+    echo "the previous oracle (group $group) is still exiting; not starting" >&2
+    exit 1
+  fi
+  rm -f oracle.pid
 fi
 setsid nohup deploy/run.sh --supervise > /dev/null 2>&1 < /dev/null &
 echo $! > oracle.pid
