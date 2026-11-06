@@ -30,7 +30,7 @@ class Model:
         "stagger_s": 2,
         "request_timeout_s": 900,
         "recycle_rss_gb": 17,
-        "max_batch": 256,
+        "max_batch": 512,
     }
 
     def __init__(self):

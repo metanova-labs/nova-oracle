@@ -31,7 +31,7 @@ Tuning defaults, measured on 8× RTX 4090:
 | `ORACLE_STAGGER_S` | 2 |
 | `ORACLE_REQUEST_TIMEOUT_S` | 900 |
 | `ORACLE_RECYCLE_RSS_GB` | 17 |
-| `ORACLE_MAX_BATCH` | 256 |
+| `ORACLE_MAX_BATCH` | 512 |
 
 ## Scores
 
