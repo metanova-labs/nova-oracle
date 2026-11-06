@@ -111,7 +111,7 @@ async def register_proteins(req: ProteinRequest):
     started = time.time()
     try:
         proteins = await anyio.to_thread.run_sync(MODEL.prepare, req.sequences)
-    except Exception as exc:  # noqa: BLE001 - an upstream failure, not a bad request
+    except Exception as exc:  # noqa: BLE001 - a preparation failure, not a bad request
         log.warning("target preparation failed: %s", exc)
         raise HTTPException(
             502, f"target preparation failed: {type(exc).__name__}: {exc}") from exc
@@ -194,6 +194,8 @@ def _dispatch(workers, units, request_id) -> dict:
                 log.warning("%s shard %d failed: %s", request_id, worker.wid, exc)
                 worker.kill()
                 return {}
+        if message.get("error"):
+            log.warning("%s shard %d: %s", request_id, worker.wid, message["error"][:1000])
         return {name: (worker.gpu, metrics)
                 for name, metrics in (message.get("results") or {}).items()}
 
