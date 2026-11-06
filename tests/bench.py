@@ -11,7 +11,7 @@ print("%d shards on %d gpus\n" % (shards, len(status["gpus"])))
 
 code, body = call("/v1/proteins", {"sequences": [NNMT]})
 assert code == 200, body
-print("target %s, %d residues, depth %d\n"
+print("target %s, %d residues, depth %s\n"
       % (body["proteins"][0]["sequence_hash"], body["proteins"][0]["residues"],
          body["proteins"][0]["depth"]))
 

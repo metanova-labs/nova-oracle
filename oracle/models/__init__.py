@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import importlib
 
-MODELS = ("boltz2",)
+MODELS = ("boltz2", "nesso")
 
 
 def load(name: str):

@@ -9,6 +9,7 @@ sequence; a round is prepared once, then scored against.
 | model | `ORACLE_MODEL` | |
 |---|---|---|
 | Boltz-2 | `boltz2` | [setup, scores, performance](oracle/models/boltz2/README.md) |
+| Nesso-1 | `nesso` | [setup, scores](oracle/models/nesso/README.md) |
 
 ## Quickstart
 
@@ -80,7 +81,7 @@ No token — it is what a caller checks before it has a round to run.
 | `409` | a target is not prepared — register it first |
 | `413` | more predictions than `ORACLE_MAX_BATCH` |
 | `422` | malformed body, or a sequence that is not residue codes |
-| `502` | preparing a target failed upstream |
+| `502` | preparing a target failed |
 | `503` | no live shards (score), or a degraded pool (health) |
 
 ## Configuration
