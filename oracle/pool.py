@@ -5,58 +5,86 @@ ceiling.
 """
 from __future__ import annotations
 
+import collections
 import concurrent.futures as futures
 import json
 import logging
 import os
-import select
+import queue
 import subprocess
 import sys
 import threading
 import time
 
 log = logging.getLogger("oracle.pool")
-WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker.py")
 
 
 class Worker:
-    """One Boltz shard pinned to a GPU, addressed over a newline JSON protocol."""
+    """One model shard pinned to a GPU, addressed over a newline JSON protocol."""
 
-    def __init__(self, wid: int, gpu: int):
-        self.wid, self.gpu = wid, gpu
+    def __init__(self, wid: int, gpu: int, script: str):
+        self.wid, self.gpu, self.script = wid, gpu, script
         self.lock = threading.Lock()
         self.requests = 0
         self.proc: subprocess.Popen | None = None
         self.spawn()
 
     def spawn(self) -> None:
-        env = dict(os.environ, WORKER_GPU=str(self.gpu),
+        # Shards sharing a Triton cache race when compiling the same kernel.
+        triton = os.path.expanduser(f"~/.triton/cache/oracle-shard{self.wid}")
+        env = dict(os.environ, WORKER_GPU=str(self.gpu), TRITON_CACHE_DIR=triton,
                    PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True")
         self.proc = subprocess.Popen(
-            [sys.executable, "-u", WORKER],
+            [sys.executable, "-u", self.script],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, bufsize=1, env=env)
+            stderr=subprocess.PIPE, text=True, bufsize=1, env=env)
+        self.messages: queue.Queue = queue.Queue()
+        self.stderr: collections.deque[str] = collections.deque(maxlen=40)
+        threading.Thread(target=self._read_stdout, args=(self.proc.stdout, self.messages),
+                         daemon=True).start()
+        self._stderr_reader = threading.Thread(
+            target=self._read_stderr, args=(self.proc.stderr, self.stderr), daemon=True)
+        self._stderr_reader.start()
         self._await_event("ready", timeout=120)
         self.requests = 0
 
+    @staticmethod
+    def _read_stdout(stream, messages: queue.Queue) -> None:
+        # A thread, not select(): select() misses lines already in the read buffer.
+        for line in stream:
+            start = line.find('{"event"')  # progress output can precede it on the line
+            if start < 0:
+                continue
+            try:
+                messages.put(json.loads(line[start:]))
+            except json.JSONDecodeError:
+                continue
+        messages.put(None)
+
+    @staticmethod
+    def _read_stderr(stream, tail: collections.deque) -> None:
+        for line in stream:
+            tail.append(line.rstrip())
+
+    def tail(self) -> str:
+        self._stderr_reader.join(timeout=2)
+        return "\n".join(self.stderr)
+
     def _await_event(self, event: str, timeout: float) -> dict:
         deadline = time.time() + timeout
-        while time.time() < deadline:
-            if not select.select([self.proc.stdout], [], [], deadline - time.time())[0]:
-                break
-            line = self.proc.stdout.readline()
-            if not line:
-                break
+        while (remaining := deadline - time.time()) > 0:
             try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # worker libraries may write to stdout; ignore non-protocol lines
+                message = self.messages.get(timeout=remaining)
+            except queue.Empty:
+                break
+            if message is None:
+                raise RuntimeError(f"worker {self.wid} exited:\n{self.tail()}")
             if message.get("event") == event:
                 return message
         raise TimeoutError(f"worker {self.wid}: no {event!r} within {timeout}s")
 
     def score(self, items: list[dict], timeout: float) -> dict:
-        """items: [{"id", "sequence", "msa", "smiles"}] -- one batch for this shard."""
+        """items: [{"id", "sequence", "input", "smiles"}] -- one batch for this shard."""
         self.proc.stdin.write(json.dumps({"items": items}) + "\n")
         self.proc.stdin.flush()
         message = self._await_event("result", timeout)
@@ -85,22 +113,23 @@ class Worker:
 class Pool:
     """Owns every shard and keeps the fleet healthy."""
 
-    # Ubiquitin, single-sequence mode: a cold start needs no network.
-    PROBE = ("MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQ"
-             "KESTLHLVLRLRGG", "empty")
     PROBE_LIGAND = "CC(=O)Oc1ccccc1C(=O)O"
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, model):
         self.cfg = cfg
         # Breadth-first, so a batch smaller than the pool spreads one-per-card
         # rather than stacking on gpu0. Worth 2.5x on small batches.
-        self.workers: list[Worker] = []
-        for _ in range(cfg.shards_per_gpu):
-            for gpu in cfg.gpus:
-                self.workers.append(Worker(len(self.workers), gpu))
-                log.info("shard %d up on gpu%d", len(self.workers) - 1, gpu)
-                time.sleep(cfg.stagger_s)
-        self._warm = self.PROBE
+        placement = [gpu for _ in range(cfg.shards_per_gpu) for gpu in cfg.gpus]
+
+        def start(wid: int) -> Worker:
+            time.sleep(wid * cfg.stagger_s)
+            worker = Worker(wid, placement[wid], model.worker)
+            log.info("shard %d up on gpu%d", wid, placement[wid])
+            return worker
+
+        with futures.ThreadPoolExecutor(max_workers=len(placement)) as pool:
+            self.workers: list[Worker] = list(pool.map(start, range(len(placement))))
+        self._warm = model.probe
         self._stop = threading.Event()
         self._supervisor = threading.Thread(target=self._supervise, daemon=True)
         self._supervisor.start()
@@ -108,13 +137,13 @@ class Pool:
     def live(self) -> list[Worker]:
         return [worker for worker in self.workers if worker.alive()]
 
-    def warm(self, sequence: str | None = None, msa: str | None = None) -> float:
+    def warm(self, sequence: str | None = None, target_input: str | None = None) -> float:
         """Force the lazy checkpoint load so the first real request is fast.
 
         A given protein becomes the probe for later recycles too. A shard that
         will not warm is left to the supervisor."""
         if sequence is not None:
-            self._warm = (sequence, msa)
+            self._warm = (sequence, target_input)
         started = time.time()
         with futures.ThreadPoolExecutor(max_workers=len(self.workers)) as pool:
             list(pool.map(self._warm_one, self.workers))
@@ -128,10 +157,11 @@ class Pool:
                 worker.score(self._probe(), self.cfg.request_timeout_s)
             except Exception:  # noqa: BLE001 - one cold shard, not a failed round
                 log.exception("shard %d failed to warm", worker.wid)
+                worker.kill()  # a late reply would answer the next request
 
     def _probe(self) -> list[dict]:
-        sequence, msa = self._warm
-        return [{"id": "warm", "sequence": sequence, "msa": msa,
+        sequence, target_input = self._warm
+        return [{"id": "warm", "sequence": sequence, "input": target_input,
                  "smiles": self.PROBE_LIGAND}]
 
     def _supervise(self) -> None:
@@ -148,6 +178,8 @@ class Pool:
         try:
             log.warning("recycling shard %d on gpu%d (%s, rss=%.1f GB, %d requests)",
                         worker.wid, worker.gpu, reason, worker.rss_gb(), worker.requests)
+            if reason == "died":
+                log.warning("shard %d stderr:\n%s", worker.wid, worker.tail())
             worker.kill()
             worker.spawn()
             # Warm under the lock, so the ~60 s falls on one waiter rather
@@ -155,6 +187,7 @@ class Pool:
             worker.score(self._probe(), self.cfg.request_timeout_s)
         except Exception:
             log.exception("failed to recycle shard %d", worker.wid)
+            worker.kill()
         finally:
             worker.lock.release()
 

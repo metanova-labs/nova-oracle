@@ -63,9 +63,9 @@ PREDICT = {
 
 
 def score(items: list[dict]) -> dict:
-    """items: [{"id", "sequence", "msa", "smiles"}] -> {id: metrics}.
+    """items: [{"id", "sequence", "input", "smiles"}] -> {id: metrics}.
 
-    "msa" is a path to an .a3m, or "empty" for single-sequence mode."""
+    "input" is a path to an .a3m, or "empty" for single-sequence mode."""
     work = Path(tempfile.mkdtemp(prefix="oracle_", dir="/dev/shm"))
     inputs, outputs = work / "inputs", work / "out"
     inputs.mkdir(parents=True)
@@ -76,7 +76,7 @@ def score(items: list[dict]) -> dict:
                 "version": 1,
                 "sequences": [
                     {"protein": {"id": "A", "sequence": item["sequence"],
-                                 "msa": item["msa"]}},
+                                 "msa": item["input"]}},
                     {"ligand": {"id": "B", "smiles": item["smiles"]}},
                 ],
                 "properties": [{"affinity": {"binder": "B"}}],
